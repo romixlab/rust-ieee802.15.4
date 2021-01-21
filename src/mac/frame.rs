@@ -941,7 +941,24 @@ impl Address {
         }
     }
 }
-
+impl hash32::Hash for Address {
+    fn hash<H: hash32::Hasher>(&self, state: &mut H) {
+        match *self {
+            Address::None => {
+                let z = 0u16;
+                state.write(unsafe { core::slice::from_raw_parts(&z as *const _ as *const u8, 2) });
+            },
+            Address::Short(pan_id, short_addr) => {
+                state.write(unsafe { core::slice::from_raw_parts(&pan_id.0 as *const _ as *const u8, 2) });
+                state.write(unsafe { core::slice::from_raw_parts(&short_addr.0 as *const _ as *const u8, 2) })
+            },
+            Address::Extended(pan_id, extended_addr) => {
+                state.write(unsafe { core::slice::from_raw_parts(&pan_id.0 as *const _ as *const u8, 2) });
+                state.write(unsafe { core::slice::from_raw_parts(&extended_addr.0 as *const _ as *const u8, 8) })
+            },
+        }
+    }
+}
 
 /// Content of a frame
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1147,6 +1164,47 @@ mod tests {
                 0x43, 0xbc, 0x9a, 0xff, 0x0f, 0x00, 0x00, 0xde, 0xf0
             ]
         );
+    }
+
+    #[test]
+    fn encode_ver1_short_max_len() {
+        use core::num::Wrapping;
+        const PAYLOAD_LEN: usize = 115;
+        let mut payload = [0u8; PAYLOAD_LEN];
+        let mut counter = Wrapping(0u8);
+        for i in 0..PAYLOAD_LEN {
+            payload[i] = counter.0;
+            counter += Wrapping(1);
+        }
+        let frame = Frame {
+            header: Header {
+                frame_type: FrameType::Data,
+                security: Security::None,
+                frame_pending: false,
+                ack_request: false,
+                pan_id_compress: false,
+                version: FrameVersion::Ieee802154_2006,
+                destination: Address::Short(PanId(0x1234), ShortAddress(0x5678)),
+                source: Address::Short(PanId(0x4321), ShortAddress(0x9abc)),
+                seq: 0xff,
+            },
+            content: FrameContent::Data,
+            payload: &payload,
+            footer: [0x00, 0x00],
+        };
+        const EXPECTED_PDU_LEN: usize = PAYLOAD_LEN + 11;
+        let mut buf = [0u8; EXPECTED_PDU_LEN];
+        let size = frame.encode(&mut buf, WriteFooter::No);
+        assert_eq!(size, EXPECTED_PDU_LEN);
+        assert_eq!(
+            buf[..11],
+            [
+                0x01, 0x98, 0xff, 0x34, 0x12, 0x78, 0x56, 0x21, 0x43, 0xbc, 0x9a
+            ]
+        );
+        for (i, b) in payload.iter().enumerate() {
+            assert_eq!(*b, buf[11 + i]);
+        }
     }
 
     #[test]
